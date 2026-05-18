@@ -1,74 +1,6 @@
 import React, { useState, useRef } from 'react';
 
 /**
- * Parser CSV robuste : gère les valeurs entre guillemets, les guillemets échappés ("")
- * et les retours à la ligne à l'intérieur des cellules.
- * Le séparateur est détecté automatiquement (priorité au ';' s'il apparaît
- * plus souvent que ',' sur la première ligne hors guillemets).
- */
-function parseCSV(text) {
-  if (!text || !text.trim()) return null;
-
-  // Détection du séparateur sur la première ligne, hors guillemets
-  let sep = ',';
-  {
-    let inQ = false;
-    let semis = 0;
-    let commas = 0;
-    for (let i = 0; i < text.length; i++) {
-      const c = text[i];
-      if (c === '"') inQ = !inQ;
-      else if (c === '\n' && !inQ) break;
-      else if (!inQ) {
-        if (c === ';') semis++;
-        else if (c === ',') commas++;
-      }
-    }
-    if (semis > commas) sep = ';';
-  }
-
-  const rows = [];
-  let row = [];
-  let cell = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inQuotes) {
-      if (c === '"') {
-        if (text[i + 1] === '"') { cell += '"'; i++; }
-        else { inQuotes = false; }
-      } else {
-        cell += c;
-      }
-    } else {
-      if (c === '"') {
-        inQuotes = true;
-      } else if (c === sep) {
-        row.push(cell); cell = '';
-      } else if (c === '\n') {
-        row.push(cell); cell = '';
-        rows.push(row); row = [];
-      } else if (c === '\r') {
-        // ignore CR (handled with LF)
-      } else {
-        cell += c;
-      }
-    }
-  }
-  // Dernière cellule / ligne éventuelle
-  if (cell.length > 0 || row.length > 0) {
-    row.push(cell);
-    rows.push(row);
-  }
-
-  if (!rows.length) return null;
-  const headers = rows[0].map((h) => h.trim());
-  const dataRows = rows.slice(1).filter((r) => r.some((c) => c && c.trim() !== ''));
-  return { headers, rows: dataRows, sep };
-}
-
-/**
  * Format Iziship : reconnu à la présence simultanée des colonnes "Code site" et "Pareto".
  */
 function detectFormat(headers) {
@@ -168,23 +100,69 @@ export default function ImportView({ saveProducts, products, showToast }) {
   // Laisse le navigateur peindre avant d'attaquer une opération bloquante.
   const yieldToBrowser = () => new Promise((r) => setTimeout(r, 0));
 
-  const analyse = (text) => {
-    const parsed = parseCSV(text);
-    if (!parsed) { setPreview(null); return; }
-    const fmt = detectFormat(parsed.headers);
-    setFormat(fmt);
-    setPreview(parsed);
-    if (fmt === 'simple') {
-      // Re-tente une auto-détection des colonnes par leur nom pour le format simple
-      setMapping({
-        sku:      Math.max(0, colIdx(parsed.headers, 'SKU')),
-        name:     Math.max(0, colIdx(parsed.headers, 'Nom') >= 0 ? colIdx(parsed.headers, 'Nom') : 1),
-        rotation: Math.max(0, colIdx(parsed.headers, 'Rotation') >= 0 ? colIdx(parsed.headers, 'Rotation') : 2),
-        x:        Math.max(0, colIdx(parsed.headers, 'X') >= 0 ? colIdx(parsed.headers, 'X') : 3),
-        y:        Math.max(0, colIdx(parsed.headers, 'Y') >= 0 ? colIdx(parsed.headers, 'Y') : 4),
-      });
+  /**
+   * Lance le parsing dans un Web Worker pour ne pas geler l'UI sur les gros
+   * fichiers (~11 000 lignes d'Iziship). Retourne une promesse qui se résout
+   * quand le worker a terminé.
+   * Les messages 'progress' du worker mettent à jour l'overlay `busy` en temps
+   * réel pour rassurer l'utilisateur — sans worker, ce feedback était impossible
+   * puisque la boucle de parsing bloquait le repaint.
+   */
+  const analyse = (text) => new Promise((resolve) => {
+    if (!text || !text.trim()) {
+      setPreview(null);
+      resolve();
+      return;
     }
-  };
+
+    const worker = new Worker(
+      new URL('../lib/csvParser.worker.js', import.meta.url),
+      { type: 'module' }
+    );
+
+    const cleanup = () => {
+      worker.terminate();
+      resolve();
+    };
+
+    worker.onmessage = (e) => {
+      const msg = e.data;
+      if (msg.type === 'progress') {
+        setBusy(`Analyse du fichier… ${msg.pct}%`);
+      } else if (msg.type === 'done') {
+        const parsed = msg.result;
+        if (!parsed) {
+          setPreview(null);
+          cleanup();
+          return;
+        }
+        const fmt = detectFormat(parsed.headers);
+        setFormat(fmt);
+        setPreview(parsed);
+        if (fmt === 'simple') {
+          // Re-tente une auto-détection des colonnes par leur nom
+          setMapping({
+            sku:      Math.max(0, colIdx(parsed.headers, 'SKU')),
+            name:     Math.max(0, colIdx(parsed.headers, 'Nom') >= 0 ? colIdx(parsed.headers, 'Nom') : 1),
+            rotation: Math.max(0, colIdx(parsed.headers, 'Rotation') >= 0 ? colIdx(parsed.headers, 'Rotation') : 2),
+            x:        Math.max(0, colIdx(parsed.headers, 'X') >= 0 ? colIdx(parsed.headers, 'X') : 3),
+            y:        Math.max(0, colIdx(parsed.headers, 'Y') >= 0 ? colIdx(parsed.headers, 'Y') : 4),
+          });
+        }
+        cleanup();
+      } else if (msg.type === 'error') {
+        showToast(msg.message || 'Erreur de parsing CSV', 'error');
+        cleanup();
+      }
+    };
+
+    worker.onerror = (err) => {
+      showToast(err.message || 'Erreur du worker CSV', 'error');
+      cleanup();
+    };
+
+    worker.postMessage({ text });
+  });
 
   const handleFile = (e) => {
     const file = e.target.files[0];
@@ -193,18 +171,18 @@ export default function ImportView({ saveProducts, products, showToast }) {
     reader.onload = async (ev) => {
       const text = ev.target.result;
       setCsvText(text);
-      setBusy('Analyse du fichier…');
+      setBusy('Analyse du fichier… 0%');
       await yieldToBrowser();
-      analyse(text);
+      await analyse(text);
       setBusy(null);
     };
     reader.readAsText(file);
   };
 
   const parseText = async () => {
-    setBusy('Analyse…');
+    setBusy('Analyse… 0%');
     await yieldToBrowser();
-    analyse(csvText);
+    await analyse(csvText);
     setBusy(null);
   };
 

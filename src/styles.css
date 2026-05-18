@@ -1,0 +1,133 @@
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: #0a0a0a;
+  color: #e4e4e7;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono { font-family: 'JetBrains Mono', monospace; }
+.display { font-family: 'Oswald', sans-serif; letter-spacing: 0.02em; }
+
+.tab-btn {
+  background: transparent;
+  border: none;
+  color: #71717a;
+  padding: 14px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-family: inherit;
+}
+.tab-btn:hover { color: #fafafa; }
+.tab-btn.active { color: #f59e0b; border-bottom-color: #f59e0b; }
+
+.card {
+  background: #131316;
+  border: 1px solid #27272a;
+  border-radius: 6px;
+  padding: 20px;
+}
+
+.stat-num {
+  font-family: 'Oswald', sans-serif;
+  font-size: 36px;
+  font-weight: 700;
+  color: #fafafa;
+  line-height: 1;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: #71717a;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-top: 8px;
+}
+
+.btn {
+  background: #f59e0b;
+  color: #0a0a0a;
+  border: none;
+  padding: 9px 16px;
+  border-radius: 4px;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+.btn:hover { background: #fbbf24; }
+
+.btn-ghost {
+  background: transparent;
+  color: #e4e4e7;
+  border: 1px solid #3f3f46;
+}
+.btn-ghost:hover { background: #18181b; border-color: #52525b; }
+
+.btn-danger { background: #ef4444; color: white; }
+.btn-danger:hover { background: #dc2626; }
+
+input, select, textarea {
+  background: #18181b;
+  color: #fafafa;
+  border: 1px solid #27272a;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 13px;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: #f59e0b;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+th {
+  text-align: left;
+  padding: 10px 12px;
+  background: #18181b;
+  color: #a1a1aa;
+  font-weight: 500;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid #27272a;
+}
+td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #1f1f23;
+}
+tr:hover td { background: #131316; }
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 999px;
+  font-size: 11px;
+  color: #a1a1aa;
+}

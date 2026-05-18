@@ -40,7 +40,10 @@ export default function App() {
   };
 
   const saveLayout = async (l) => { setLayout(l); await storageSet('warehouse:layout', l); };
-  const saveProducts = async (p) => { setProducts(p); await storageSet('products:list', p); };
+  // `onProgress(done, total)` est forwardé jusqu'à la couche storage pour
+  // permettre à l'import massif (Iziship ~11k lignes) d'afficher une barre
+  // de progression batch par batch.
+  const saveProducts = async (p, onProgress) => { setProducts(p); await storageSet('products:list', p, onProgress); };
   const saveStats = async (s) => { setStats(s); await storageSet('stats:daily', s); };
 
   const optim = useMemo(() => computeOptimizationScore(products, layout), [products, layout]);

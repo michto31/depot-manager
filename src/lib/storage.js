@@ -133,19 +133,26 @@ async function getProducts() {
 /**
  * Persiste la liste des produits par upsert en batch de 500.
  *
+ * Un callback `onProgress(done, total)` optionnel est appelé après chaque batch
+ * réussi — utile pour afficher une progression pendant un gros import.
+ *
  * NB : on ne fait pas de DELETE global (risqué). Conséquence : si on retire
  * un produit du tableau côté UI, il reste en DB et reviendra au prochain GET.
  * Pour "supprimer" il faut mettre `active = false` (filtré au GET) ou ajouter
  * une fonction `deleteProductById` dédiée plus tard.
  */
-async function setProducts(products) {
+async function setProducts(products, onProgress) {
   if (!Array.isArray(products) || products.length === 0) return;
+  const total = Math.ceil(products.length / UPSERT_BATCH);
+  let done = 0;
   for (let i = 0; i < products.length; i += UPSERT_BATCH) {
     const batch = products.slice(i, i + UPSERT_BATCH).map(productToRow);
     const { error } = await supabase
       .from('products')
       .upsert(batch, { onConflict: 'id' });
     if (error) throw error;
+    done++;
+    if (onProgress) onProgress(done, total);
   }
 }
 
@@ -201,11 +208,11 @@ export async function storageGet(key, fallback = null) {
   }
 }
 
-export async function storageSet(key, value) {
+export async function storageSet(key, value, onProgress) {
   if (!isConfigured) return false;
   try {
     if (key === 'warehouse:layout') await setLayout(value);
-    else if (key === 'products:list') await setProducts(value);
+    else if (key === 'products:list') await setProducts(value, onProgress);
     else if (key === 'stats:daily')   await setStats(value);
     else return false;
     return true;

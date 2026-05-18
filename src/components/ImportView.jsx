@@ -88,6 +88,10 @@ function rowToIzishipProduct(headers, row, i) {
   };
 }
 
+// Taille de chunk pour la construction des objets produit : 500 itérations
+// puis un yield au navigateur. Sur 11k+ lignes, ça maintient les paints à >30fps.
+const BUILD_CHUNK = 500;
+
 export default function ImportView({ saveProducts, products, showToast }) {
   const [csvText, setCsvText] = useState('');
   const [preview, setPreview] = useState(null);
@@ -95,6 +99,9 @@ export default function ImportView({ saveProducts, products, showToast }) {
   const [mapping, setMapping] = useState({ sku: 0, name: 1, rotation: 2, x: 3, y: 4 });
   // Message d'overlay non-null = traitement en cours, l'UI est verrouillée.
   const [busy, setBusy] = useState(null);
+  // True pendant l'import : masque l'aperçu pour éviter que React re-rende
+  // le bloc preview à chaque tick de progression (perceptible sur gros volumes).
+  const [importing, setImporting] = useState(false);
   const fileInput = useRef(null);
 
   // Laisse le navigateur peindre avant d'attaquer une opération bloquante.
@@ -186,49 +193,85 @@ export default function ImportView({ saveProducts, products, showToast }) {
     setBusy(null);
   };
 
-  const buildImported = () => {
+  /**
+   * Construit les objets produit par chunks de BUILD_CHUNK lignes, avec un
+   * yield au navigateur entre chaque. Empêche le freeze sur les imports de
+   * ~11k lignes : sans ça, la boucle map() synchrone gèle l'UI plusieurs secondes.
+   * `onProgress(done, total)` est appelé après chaque chunk.
+   */
+  const buildImported = async (onProgress) => {
     if (!preview) return [];
-    if (format === 'iziship') {
-      return preview.rows
-        .map((r, i) => rowToIzishipProduct(preview.headers, r, i))
-        .filter((p) => p.sku);
+    const rows = preview.rows;
+    const headers = preview.headers;
+    const total = rows.length;
+    const out = [];
+
+    for (let i = 0; i < total; i += BUILD_CHUNK) {
+      const end = Math.min(i + BUILD_CHUNK, total);
+      for (let j = i; j < end; j++) {
+        const r = rows[j];
+        if (format === 'iziship') {
+          out.push(rowToIzishipProduct(headers, r, j));
+        } else if (r[mapping.sku]) {
+          out.push({
+            id: genLocalId('imp', j),
+            sku: (r[mapping.sku] || '').trim(),
+            name: (r[mapping.name] || '').trim(),
+            rotation: parseNum(r[mapping.rotation]) ?? 0,
+            x: parseNum(r[mapping.x]),
+            y: parseNum(r[mapping.y]),
+            active: true,
+          });
+        }
+      }
+      if (onProgress) onProgress(end, total);
+      await yieldToBrowser();
     }
-    // Format simple historique
-    return preview.rows
-      .filter((r) => r[mapping.sku])
-      .map((r, i) => ({
-        id: genLocalId('imp', i),
-        sku: (r[mapping.sku] || '').trim(),
-        name: (r[mapping.name] || '').trim(),
-        rotation: parseNum(r[mapping.rotation]) ?? 0,
-        x: parseNum(r[mapping.x]),
-        y: parseNum(r[mapping.y]),
-        active: true,
-      }));
+
+    // Filtre final : pour Iziship on rejette les lignes sans SKU (le format
+    // simple les a déjà sautées dans la boucle ci-dessus).
+    return format === 'iziship' ? out.filter((p) => p.sku) : out;
   };
 
   const importNow = async (mode) => {
-    setBusy('Préparation de l\'import…');
+    setImporting(true);
+    setBusy('Préparation de l\'import… 0%');
     await yieldToBrowser();
 
-    const imported = buildImported();
+    let imported;
+    try {
+      imported = await buildImported((done, total) => {
+        const pct = Math.floor((done / total) * 100);
+        setBusy(`Préparation de l'import… ${done.toLocaleString('fr-FR')} / ${total.toLocaleString('fr-FR')} (${pct}%)`);
+      });
+    } catch (e) {
+      console.error(e);
+      showToast('Erreur lors de la préparation', 'error');
+      setBusy(null);
+      setImporting(false);
+      return;
+    }
+
     if (!imported.length) {
       setBusy(null);
+      setImporting(false);
       showToast('Aucune ligne à importer', 'error');
       return;
     }
 
-    setBusy(`Sauvegarde de ${imported.length.toLocaleString('fr-FR')} produits…`);
+    const finalList = mode === 'replace' ? imported : [...products, ...imported];
+    setBusy(`Sauvegarde… 0 / ? batches`);
     await yieldToBrowser();
 
     try {
-      if (mode === 'replace') {
-        await saveProducts(imported);
-        showToast(`${imported.length} produits importés (remplacement)`);
-      } else {
-        await saveProducts([...products, ...imported]);
-        showToast(`${imported.length} produits ajoutés`);
-      }
+      await saveProducts(finalList, (done, total) => {
+        setBusy(`Sauvegarde… batch ${done} / ${total} (${imported.length.toLocaleString('fr-FR')} produits)`);
+      });
+      showToast(
+        mode === 'replace'
+          ? `${imported.length} produits importés (remplacement)`
+          : `${imported.length} produits ajoutés`
+      );
       setPreview(null);
       setCsvText('');
       if (fileInput.current) fileInput.current.value = '';
@@ -237,6 +280,7 @@ export default function ImportView({ saveProducts, products, showToast }) {
       showToast('Erreur lors de la sauvegarde', 'error');
     } finally {
       setBusy(null);
+      setImporting(false);
     }
   };
 
@@ -324,7 +368,7 @@ DEF456,Boîtier plastique,12,18,10`}</pre>
         </div>
       </div>
 
-      {preview && (
+      {preview && !importing && (
         <div className="card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <div className="display" style={{ fontSize: 13, color: '#a1a1aa', letterSpacing: '0.1em' }}>

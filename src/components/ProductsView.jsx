@@ -1,5 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { productClass } from '../lib/optimization.js';
+
+// Génère un id local unique (manuel / fallback). Format : "loc-<timestamp>-<random>".
+function genLocalId() {
+  return `loc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 export default function ProductsView({ products, saveProducts, showToast }) {
   const [filter, setFilter] = useState('');
@@ -7,6 +12,10 @@ export default function ProductsView({ products, saveProducts, showToast }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
   const [newProd, setNewProd] = useState({ sku: '', name: '', rotation: 0, x: 0, y: 0 });
+
+  // Pagination
+  const [pageSize, setPageSize] = useState(50);
+  const [currentPage, setCurrentPage] = useState(1);
 
   // Indique si le catalogue contient des données Iziship (au moins un produit avec pareto/rank)
   const hasIzishipData = useMemo(
@@ -47,6 +56,17 @@ export default function ProductsView({ products, saveProducts, showToast }) {
     return arr;
   }, [products, filter, sortBy, showInactive]);
 
+  // Pagination appliquée APRÈS filtre+tri pour qu'on parcoure bien tout le dataset.
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  // Garde-fou : si la page courante dépasse le total (suite à un filtre), on clampe.
+  const safePage = Math.min(currentPage, totalPages);
+  const start = (safePage - 1) * pageSize;
+  const end = Math.min(start + pageSize, filtered.length);
+  const pageItems = useMemo(() => filtered.slice(start, end), [filtered, start, end]);
+
+  // Retour à la page 1 quand le filtre / le tri / le toggle inactifs changent.
+  useEffect(() => { setCurrentPage(1); }, [filter, sortBy, showInactive, pageSize]);
+
   const inactiveCount = useMemo(
     () => products.filter((p) => p.active === false).length,
     [products]
@@ -54,7 +74,7 @@ export default function ProductsView({ products, saveProducts, showToast }) {
 
   const addProduct = () => {
     if (!newProd.sku || !newProd.name) { showToast('SKU et nom requis', 'error'); return; }
-    saveProducts([...products, { ...newProd, active: true, id: Date.now().toString() }]);
+    saveProducts([...products, { ...newProd, active: true, id: genLocalId() }]);
     setNewProd({ sku: '', name: '', rotation: 0, x: 0, y: 0 });
     setShowAdd(false);
     showToast('Produit ajouté');
@@ -74,6 +94,11 @@ export default function ProductsView({ products, saveProducts, showToast }) {
     if (raw === '') updateProduct(id, field, null);
     else updateProduct(id, field, Number(raw));
   };
+
+  const goFirst = () => setCurrentPage(1);
+  const goPrev  = () => setCurrentPage((p) => Math.max(1, p - 1));
+  const goNext  = () => setCurrentPage((p) => Math.min(totalPages, p + 1));
+  const goLast  = () => setCurrentPage(totalPages);
 
   return (
     <div>
@@ -119,7 +144,7 @@ export default function ProductsView({ products, saveProducts, showToast }) {
         </label>
       </div>
 
-      <div className="card" style={{ padding: 0, overflow: 'auto' }}>
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         {filtered.length === 0 ? (
           <div style={{ padding: 40, textAlign: 'center', color: '#52525b' }}>
             <div style={{ marginBottom: 12, fontSize: 14 }}>Aucun produit</div>
@@ -130,75 +155,117 @@ export default function ProductsView({ products, saveProducts, showToast }) {
             </div>
           </div>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th style={{ width: 50 }}>Cl.</th>
-                <th>SKU</th>
-                <th>Nom</th>
-                <th>Code site</th>
-                <th style={{ width: 70 }}>Stock</th>
-                <th style={{ width: 70 }}>Rank</th>
-                <th style={{ width: 90 }}>Rotation</th>
-                <th>Position</th>
-                <th style={{ width: 60 }}>Actif</th>
-                <th style={{ width: 50 }}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((p) => {
-                const cls = productClass(p);
-                const isInactive = p.active === false;
-                return (
-                  <tr key={p.id} style={isInactive ? { opacity: 0.5 } : undefined}>
-                    <td><span className="badge" style={{ background: cls.bg, color: cls.color }}>{cls.label}</span></td>
-                    <td className="mono">
-                      {p.sku}
-                      {p.ean && <div style={{ fontSize: 10, color: '#52525b' }}>{p.ean}</div>}
-                    </td>
-                    <td>{p.name}</td>
-                    <td className="mono" style={{ fontSize: 12, color: p.locationCode ? '#e4e4e7' : '#52525b' }}>
-                      {p.locationCode || '—'}
-                    </td>
-                    <td className="mono">{p.stock ?? 0}</td>
-                    <td className="mono" style={{ color: p.rank == null ? '#52525b' : '#e4e4e7' }}>
-                      {p.rank ?? '—'}
-                    </td>
-                    <td>
-                      <input type="number" value={p.rotation || 0} onChange={(e) => updateProduct(p.id, 'rotation', Number(e.target.value))} style={{ width: 70 }} />
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                        <input
-                          type="number"
-                          placeholder="—"
-                          value={coordVal(p.x)}
-                          onChange={(e) => onCoordChange(p.id, 'x', e.target.value)}
-                          style={{ width: 50 }}
-                        />
-                        <span style={{ color: '#52525b' }}>,</span>
-                        <input
-                          type="number"
-                          placeholder="—"
-                          value={coordVal(p.y)}
-                          onChange={(e) => onCoordChange(p.id, 'y', e.target.value)}
-                          style={{ width: 50 }}
-                        />
-                      </div>
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <input
-                        type="checkbox"
-                        checked={p.active !== false}
-                        onChange={(e) => updateProduct(p.id, 'active', e.target.checked)}
-                      />
-                    </td>
-                    <td><button className="btn-ghost btn" style={{ padding: '4px 10px', fontSize: 11 }} onClick={() => deleteProduct(p.id)}>×</button></td>
+          <>
+            <div style={{ overflow: 'auto' }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th style={{ width: 50 }}>Cl.</th>
+                    <th>SKU</th>
+                    <th>Nom</th>
+                    <th>Code site</th>
+                    <th style={{ width: 70 }}>Stock</th>
+                    <th style={{ width: 70 }}>Rank</th>
+                    <th style={{ width: 90 }}>Rotation</th>
+                    <th>Position</th>
+                    <th style={{ width: 60 }}>Actif</th>
+                    <th style={{ width: 50 }}></th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                </thead>
+                <tbody>
+                  {pageItems.map((p) => {
+                    const cls = productClass(p);
+                    const isInactive = p.active === false;
+                    return (
+                      <tr key={p.id} style={isInactive ? { opacity: 0.5 } : undefined}>
+                        <td><span className="badge" style={{ background: cls.bg, color: cls.color }}>{cls.label}</span></td>
+                        <td className="mono">
+                          {p.sku}
+                          {p.ean && <div style={{ fontSize: 10, color: '#52525b' }}>{p.ean}</div>}
+                        </td>
+                        <td>{p.name}</td>
+                        <td className="mono" style={{ fontSize: 12, color: p.locationCode ? '#e4e4e7' : '#52525b' }}>
+                          {p.locationCode || '—'}
+                        </td>
+                        <td className="mono">{p.stock ?? 0}</td>
+                        <td className="mono" style={{ color: p.rank == null ? '#52525b' : '#e4e4e7' }}>
+                          {p.rank ?? '—'}
+                        </td>
+                        <td>
+                          <input type="number" value={p.rotation || 0} onChange={(e) => updateProduct(p.id, 'rotation', Number(e.target.value))} style={{ width: 70 }} />
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                            <input
+                              type="number"
+                              placeholder="—"
+                              value={coordVal(p.x)}
+                              onChange={(e) => onCoordChange(p.id, 'x', e.target.value)}
+                              style={{ width: 50 }}
+                            />
+                            <span style={{ color: '#52525b' }}>,</span>
+                            <input
+                              type="number"
+                              placeholder="—"
+                              value={coordVal(p.y)}
+                              onChange={(e) => onCoordChange(p.id, 'y', e.target.value)}
+                              style={{ width: 50 }}
+                            />
+                          </div>
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <input
+                            type="checkbox"
+                            checked={p.active !== false}
+                            onChange={(e) => updateProduct(p.id, 'active', e.target.checked)}
+                          />
+                        </td>
+                        <td><button className="btn-ghost btn" style={{ padding: '4px 10px', fontSize: 11 }} onClick={() => deleteProduct(p.id)}>×</button></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Barre de pagination compacte */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '10px 14px',
+              borderTop: '1px solid #27272a',
+              background: '#0f0f12',
+              fontSize: 12,
+              color: '#a1a1aa',
+              flexWrap: 'wrap',
+              gap: 8,
+            }}>
+              <div className="mono">
+                {start + 1}–{end} sur {filtered.length} produit{filtered.length > 1 ? 's' : ''}
+              </div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <button className="btn-ghost btn" disabled={safePage <= 1} onClick={goFirst} style={{ padding: '4px 8px', fontSize: 11 }} title="Première page">‹‹</button>
+                <button className="btn-ghost btn" disabled={safePage <= 1} onClick={goPrev}  style={{ padding: '4px 8px', fontSize: 11 }} title="Page précédente">‹ Préc</button>
+                <span className="mono" style={{ padding: '0 10px', color: '#f59e0b' }}>
+                  {safePage} / {totalPages}
+                </span>
+                <button className="btn-ghost btn" disabled={safePage >= totalPages} onClick={goNext} style={{ padding: '4px 8px', fontSize: 11 }} title="Page suivante">Suiv ›</button>
+                <button className="btn-ghost btn" disabled={safePage >= totalPages} onClick={goLast} style={{ padding: '4px 8px', fontSize: 11 }} title="Dernière page">››</button>
+                <select
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value))}
+                  style={{ padding: '4px 6px', fontSize: 11, marginLeft: 8 }}
+                  title="Lignes par page"
+                >
+                  <option value={25}>25 / page</option>
+                  <option value={50}>50 / page</option>
+                  <option value={100}>100 / page</option>
+                  <option value={250}>250 / page</option>
+                </select>
+              </div>
+            </div>
+          </>
         )}
       </div>
     </div>

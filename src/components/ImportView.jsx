@@ -106,6 +106,14 @@ function parseNum(v) {
 }
 
 /**
+ * Identifiant local unique pour fallback. Date.now()+index seul peut entrer en collision
+ * lors d'imports successifs (même ms) ; on ajoute un suffixe aléatoire.
+ */
+function genLocalId(prefix, i) {
+  return `${prefix}-${Date.now().toString(36)}-${i}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
  * Convertit une ligne Iziship en objet produit côté app.
  * Les coordonnées X/Y sont laissées indéfinies — elles seront associées
  * plus tard via un mapping séparé location_code → (x,y).
@@ -126,8 +134,12 @@ function rowToIzishipProduct(headers, row, i) {
   };
   const get = (k) => (idx[k] >= 0 ? (row[idx[k]] || '').trim() : '');
 
+  // Préfère l'ID Iziship (déjà unique côté WMS) ; sinon fallback aléatoire
+  const wmsId = get('id');
+  const id = wmsId ? `izi-${wmsId}` : genLocalId('imp', i);
+
   return {
-    id: Date.now().toString() + '-' + i,
+    id,
     sku: get('sku'),
     name: get('name'),
     ean: get('ean'),
@@ -149,7 +161,12 @@ export default function ImportView({ saveProducts, products, showToast }) {
   const [preview, setPreview] = useState(null);
   const [format, setFormat] = useState('simple');
   const [mapping, setMapping] = useState({ sku: 0, name: 1, rotation: 2, x: 3, y: 4 });
+  // Message d'overlay non-null = traitement en cours, l'UI est verrouillée.
+  const [busy, setBusy] = useState(null);
   const fileInput = useRef(null);
+
+  // Laisse le navigateur peindre avant d'attaquer une opération bloquante.
+  const yieldToBrowser = () => new Promise((r) => setTimeout(r, 0));
 
   const analyse = (text) => {
     const parsed = parseCSV(text);
@@ -173,15 +190,23 @@ export default function ImportView({ saveProducts, products, showToast }) {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = async (ev) => {
       const text = ev.target.result;
       setCsvText(text);
+      setBusy('Analyse du fichier…');
+      await yieldToBrowser();
       analyse(text);
+      setBusy(null);
     };
     reader.readAsText(file);
   };
 
-  const parseText = () => analyse(csvText);
+  const parseText = async () => {
+    setBusy('Analyse…');
+    await yieldToBrowser();
+    analyse(csvText);
+    setBusy(null);
+  };
 
   const buildImported = () => {
     if (!preview) return [];
@@ -194,7 +219,7 @@ export default function ImportView({ saveProducts, products, showToast }) {
     return preview.rows
       .filter((r) => r[mapping.sku])
       .map((r, i) => ({
-        id: Date.now().toString() + '-' + i,
+        id: genLocalId('imp', i),
         sku: (r[mapping.sku] || '').trim(),
         name: (r[mapping.name] || '').trim(),
         rotation: parseNum(r[mapping.rotation]) ?? 0,
@@ -204,20 +229,37 @@ export default function ImportView({ saveProducts, products, showToast }) {
       }));
   };
 
-  const importNow = (mode) => {
-    const imported = buildImported();
-    if (!imported.length) { showToast('Aucune ligne à importer', 'error'); return; }
+  const importNow = async (mode) => {
+    setBusy('Préparation de l\'import…');
+    await yieldToBrowser();
 
-    if (mode === 'replace') {
-      saveProducts(imported);
-      showToast(`${imported.length} produits importés (remplacement)`);
-    } else {
-      saveProducts([...products, ...imported]);
-      showToast(`${imported.length} produits ajoutés`);
+    const imported = buildImported();
+    if (!imported.length) {
+      setBusy(null);
+      showToast('Aucune ligne à importer', 'error');
+      return;
     }
-    setPreview(null);
-    setCsvText('');
-    if (fileInput.current) fileInput.current.value = '';
+
+    setBusy(`Sauvegarde de ${imported.length.toLocaleString('fr-FR')} produits…`);
+    await yieldToBrowser();
+
+    try {
+      if (mode === 'replace') {
+        await saveProducts(imported);
+        showToast(`${imported.length} produits importés (remplacement)`);
+      } else {
+        await saveProducts([...products, ...imported]);
+        showToast(`${imported.length} produits ajoutés`);
+      }
+      setPreview(null);
+      setCsvText('');
+      if (fileInput.current) fileInput.current.value = '';
+    } catch (e) {
+      console.error(e);
+      showToast('Erreur lors de la sauvegarde', 'error');
+    } finally {
+      setBusy(null);
+    }
   };
 
   // Aperçu : pour Iziship, on n'affiche qu'un sous-ensemble de colonnes lisibles
@@ -228,6 +270,39 @@ export default function ImportView({ saveProducts, products, showToast }) {
 
   return (
     <div>
+      {busy && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(10, 10, 10, 0.78)',
+          backdropFilter: 'blur(2px)',
+          zIndex: 1000,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}>
+          <div className="card" style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 14,
+            borderColor: '#f59e0b',
+            minWidth: 280,
+          }}>
+            <div style={{
+              width: 14, height: 14, borderRadius: '50%',
+              border: '2px solid #27272a',
+              borderTopColor: '#f59e0b',
+              animation: 'spin 0.8s linear infinite',
+            }} />
+            <div>
+              <div className="display" style={{ fontSize: 13, color: '#a1a1aa', letterSpacing: '0.1em', marginBottom: 2 }}>TRAITEMENT</div>
+              <div style={{ fontSize: 13 }}>{busy}</div>
+            </div>
+          </div>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      )}
+
       <div className="display" style={{ fontSize: 28, marginBottom: 6 }}>Import de données</div>
       <div style={{ color: '#71717a', fontSize: 13, marginBottom: 24 }}>
         Importez votre catalogue depuis un export Iziship (.csv) ou un CSV simple — le format est détecté automatiquement.
@@ -326,8 +401,8 @@ DEF456,Boîtier plastique,12,18,10`}</pre>
           </div>
 
           <div style={{ display: 'flex', gap: 10, marginTop: 14, justifyContent: 'flex-end' }}>
-            <button className="btn-ghost btn" onClick={() => importNow('append')}>Ajouter aux existants</button>
-            <button className="btn" onClick={() => importNow('replace')}>Remplacer tout</button>
+            <button className="btn-ghost btn" disabled={!!busy} onClick={() => importNow('append')}>Ajouter aux existants</button>
+            <button className="btn" disabled={!!busy} onClick={() => importNow('replace')}>Remplacer tout</button>
           </div>
         </div>
       )}

@@ -119,7 +119,7 @@ VITE_SUPABASE_ANON_KEY=<clé anon>`}</pre>
       </main>
 
       <footer style={{ maxWidth: 1400, margin: '0 auto', padding: '20px 24px 40px', borderTop: '1px solid #1f1f23', marginTop: 40, fontSize: 11, color: '#52525b', display: 'flex', justifyContent: 'space-between' }}>
-        <div>Données sauvegardées localement · localStorage</div>
+        <div>Données sauvegardées · Supabase</div>
         <div className="mono">v0.1 · MVP</div>
       </footer>
     </div>

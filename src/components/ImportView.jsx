@@ -260,12 +260,14 @@ export default function ImportView({ saveProducts, products, showToast }) {
     }
 
     const finalList = mode === 'replace' ? imported : [...products, ...imported];
-    setBusy(`Sauvegarde… 0 / ? batches`);
+    setBusy(`Envoi des ${finalList.length.toLocaleString('fr-FR')} produits à la base…`);
     await yieldToBrowser();
 
     try {
-      await saveProducts(finalList, (done, total) => {
-        setBusy(`Sauvegarde… batch ${done} / ${total} (${imported.length.toLocaleString('fr-FR')} produits)`);
+      await saveProducts(finalList, (done) => {
+        // Une seule requête RPC côté serveur : done passe de 0 à 1.
+        // On bascule juste le libellé pour montrer que la requête a abouti.
+        if (done === 1) setBusy('Finalisation…');
       });
       showToast(
         mode === 'replace'

@@ -19,7 +19,6 @@ import { supabase, isConfigured } from './supabase.js';
 export { isConfigured };
 
 const PAGE_SIZE = 1000;   // limite serveur Supabase par requête par défaut
-const UPSERT_BATCH = 500; // taille de batch pour les upserts massifs (import 10k+)
 
 // ─── Helpers de mapping produit ─────────────────────────────────────────────
 
@@ -131,29 +130,29 @@ async function getProducts() {
 }
 
 /**
- * Persiste la liste des produits par upsert en batch de 500.
+ * Persiste la liste des produits via une RPC Postgres unique.
  *
- * Un callback `onProgress(done, total)` optionnel est appelé après chaque batch
- * réussi — utile pour afficher une progression pendant un gros import.
+ * Pourquoi pas un upsert PostgREST batché : sur ~11k produits il fallait 23
+ * requêtes HTTP, et le plan free Supabase laissait la 10ème en pending. Une
+ * RPC unique évite la pile de requêtes et le rate limit qui va avec.
  *
- * NB : on ne fait pas de DELETE global (risqué). Conséquence : si on retire
- * un produit du tableau côté UI, il reste en DB et reviendra au prochain GET.
- * Pour "supprimer" il faut mettre `active = false` (filtré au GET) ou ajouter
- * une fonction `deleteProductById` dédiée plus tard.
+ * Le callback `onProgress(done, total)` est conservé pour compat — appelé une
+ * fois à 0/1 (avant la requête) puis à 1/1 (après) pour que l'UI puisse
+ * afficher un état "en cours" puis "terminé".
+ *
+ * NB : on ne fait toujours pas de DELETE global. Si on retire un produit du
+ * tableau côté UI il reste en DB. Pour "supprimer" il faut mettre
+ * `active = false` (filtré au GET) ou ajouter une fonction dédiée.
  */
 async function setProducts(products, onProgress) {
   if (!Array.isArray(products) || products.length === 0) return;
-  const total = Math.ceil(products.length / UPSERT_BATCH);
-  let done = 0;
-  for (let i = 0; i < products.length; i += UPSERT_BATCH) {
-    const batch = products.slice(i, i + UPSERT_BATCH).map(productToRow);
-    const { error } = await supabase
-      .from('products')
-      .upsert(batch, { onConflict: 'id' });
-    if (error) throw error;
-    done++;
-    if (onProgress) onProgress(done, total);
-  }
+  if (onProgress) onProgress(0, 1);
+  const payload = products.map(productToRow);
+  const { error } = await supabase.rpc('bulk_upsert_products', {
+    products_data: payload,
+  });
+  if (error) throw error;
+  if (onProgress) onProgress(1, 1);
 }
 
 // ─── Accès Stats ────────────────────────────────────────────────────────────
